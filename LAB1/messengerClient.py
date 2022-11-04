@@ -9,11 +9,10 @@ from typing import Dict
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import HashAlgorithm
-from cryptography.hazmat.primitives.hmac import HMAC
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 hkdf_salt = urandom(32)
-hkdf_info = b"RatchetPair v1.0"
+hkdf_info = b"Ratchet v1.0"
 
 
 class MessengerClient:
@@ -36,7 +35,7 @@ class MessengerClient:
 
         self.username = username
         # Data regarding active connections.
-        self.conn: Dict[str, RatchetPair] = {}
+        self.conn: Dict[str, Ratchet] = {}
         # Maximum number of message keys that can be skipped in a single chain
         self.max_skip = max_skip
 
@@ -50,7 +49,7 @@ class MessengerClient:
 
         """
 
-        self.conn[username] = RatchetPair(chain_key_send, chain_key_recv, self.max_skip)
+        self.conn[username] = Ratchet(chain_key_send, chain_key_recv, self.max_skip)
 
     def send_message(self, username: str, message: str) -> (bytes, Header):
         """ Send a message to a user
@@ -68,7 +67,7 @@ class MessengerClient:
         """
 
         if username not in self.conn:
-            raise UnknownUserError(username)
+            raise UnknownUser(username)
 
         ciphertext, header = self.conn[username].ratchet_encrypt(str.encode(message))
 
@@ -91,21 +90,26 @@ class MessengerClient:
         """
 
         if username not in self.conn:
-            raise UnknownUserError(username)
+            raise UnknownUser(username)
 
         plaintext = self.conn[username].ratchet_decrypt(message, header)
 
         return plaintext.decode()
 
 
-class UnknownUserError(Exception):
+class UnknownUser(Exception):
     def __init__(self, username: str):
         super().__init__(f"unknown user '{username}'")
 
 
 class MaxMessageSkipExceeded(Exception):
     def __init__(self, max_skip: int, required_skip: int):
-        super().__init__(f"maximum message skip exceeded: {required_skip} > {max_skip}")
+        super().__init__(f"maximum message skip exceeded: '{required_skip}' > '{max_skip}'")
+
+
+class MessageKeyNotFound(Exception):
+    def __init__(self, message_index: int):
+        super().__init__(f"message key for index '{message_index}' not found")
 
 
 @dataclass
@@ -115,7 +119,7 @@ class Header:
 
 
 @dataclass
-class RatchetPair:
+class Ratchet:
     # Stores current sending and receiving keys for the user
     send_key: bytes
     recv_key: bytes
@@ -138,39 +142,11 @@ class RatchetPair:
     salt: bytes = hkdf_salt
     info: bytes = hkdf_info
 
-    # HMAC parameters
-    hmac_hashing_algorithm: HashAlgorithm = hashes.SHA256()
-    message_key_input: bytes = b"\x01"
-    chain_key_input: bytes = b"\x02"
-
     # AES-GCM parameters
     aes_gcm_nonce_size: int = 12
 
-    def _kdf(self, key_material: bytes) -> bytes:
-        hkdf = HKDF(
-            algorithm=self.hkdf_hashing_algorithm,
-            length=self.key_length,
-            salt=self.salt,
-            info=self.info,
-        )
-
-        new_key: bytes = hkdf.derive(key_material)
-
-        return new_key
-
-    def _kdf_ck_mk(self, key: bytes) -> (bytes, bytes):
-        hmac_chain_key = HMAC(key, self.hmac_hashing_algorithm)
-        hmac_message_key = hmac_chain_key.copy()
-
-        hmac_chain_key.update(self.chain_key_input)
-        hmac_message_key.update(self.message_key_input)
-
-        return hmac_chain_key.finalize(), hmac_message_key.finalize()
-
     def ratchet_encrypt(self, plaintext: bytes) -> (bytes, Header):
-        self.send_key, message_key = self._kdf_ck_mk(
-            self._kdf(self.send_key)
-        )
+        self.send_key, message_key = self._kdf(self.send_key)
 
         aes = AESGCM(message_key)
         nonce = urandom(self.aes_gcm_nonce_size)
@@ -183,32 +159,54 @@ class RatchetPair:
         return ciphertext, header
 
     def ratchet_decrypt(self, ciphertext: bytes, header: Header) -> bytes:
-        if (header.message_index - self.recv_count) > self.max_skip:
-            raise MaxMessageSkipExceeded(self.max_skip, header.message_index - self.recv_count)
+        self._check_max_skip(header)
 
         if header.message_index < self.recv_count:
-            message_key = self.skipped_message_keys[header.message_index]
-            del self.skipped_message_keys[header.message_index]
-
-            aes = AESGCM(message_key)
-            plaintext = aes.decrypt(header.nonce, ciphertext, None)
-
-            return plaintext
+            return self._use_previously_generated_message_key(ciphertext, header)
 
         if header.message_index > self.recv_count:
-            for _ in range(header.message_index - self.recv_count):
-                self.recv_key, message_key = self._kdf_ck_mk(
-                    self._kdf(self.recv_key)
-                )
-                self.skipped_message_keys[self.recv_count] = message_key
-                self.recv_count += 1
+            self._save_generated_message_keys(header)
 
-        self.recv_key, message_key = self._kdf_ck_mk(
-            self._kdf(self.recv_key)
-        )
+        self.recv_key, message_key = self._kdf(self.recv_key)
+        self.recv_count += 1
+
         aes = AESGCM(message_key)
         plaintext = aes.decrypt(header.nonce, ciphertext, None)
 
-        self.recv_count += 1
+        return plaintext
+
+    def _kdf(self, chain_key: bytes) -> (bytes, bytes):
+        hkdf = HKDF(
+            algorithm=self.hkdf_hashing_algorithm,
+            length=2 * self.key_length,
+            salt=self.salt,
+            info=self.info,
+        )
+
+        key: bytes = hkdf.derive(chain_key)
+        chain_key: bytes = key[:self.key_length]
+        message_key: bytes = key[self.key_length:]
+
+        return chain_key, message_key
+
+    def _check_max_skip(self, header: Header):
+        if (header.message_index - self.recv_count) > self.max_skip:
+            raise MaxMessageSkipExceeded(self.max_skip, header.message_index - self.recv_count)
+
+    def _use_previously_generated_message_key(self, ciphertext: bytes, header: Header) -> bytes:
+        if header.message_index not in self.skipped_message_keys:
+            raise MessageKeyNotFound(header.message_index)
+
+        message_key = self.skipped_message_keys[header.message_index]
+        del self.skipped_message_keys[header.message_index]
+
+        aes = AESGCM(message_key)
+        plaintext = aes.decrypt(header.nonce, ciphertext, None)
 
         return plaintext
+
+    def _save_generated_message_keys(self, header: Header):
+        for _ in range(header.message_index - self.recv_count):
+            self.recv_key, message_key = self._kdf(self.recv_key)
+            self.skipped_message_keys[self.recv_count] = message_key
+            self.recv_count += 1
