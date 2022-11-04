@@ -9,7 +9,6 @@ from messengerClient import MessengerClient
 class TestMessenger(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-
         cls.key1 = os.urandom(32)
         cls.key2 = os.urandom(32)
         cls.key3 = os.urandom(32)
@@ -163,7 +162,6 @@ class TestMessenger(unittest.TestCase):
         self.assertRaises(Exception, alice.receive_message, 'Bob', message, header)
 
     def test_out_of_order_messages(self):
-
         alice = MessengerClient('Alice')
         bob = MessengerClient('Bob')
 

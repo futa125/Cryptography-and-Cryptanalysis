@@ -12,6 +12,9 @@ from cryptography.hazmat.primitives.hashes import HashAlgorithm
 from cryptography.hazmat.primitives.hmac import HMAC
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+hkdf_salt = urandom(32)
+hkdf_info = b"RatchetPair v1.0"
+
 
 class MessengerClient:
     """ Messenger client class
@@ -132,8 +135,8 @@ class RatchetPair:
     # HKDF parameters
     key_length: int = 32
     hkdf_hashing_algorithm: HashAlgorithm = hashes.SHA256()
-    salt: bytes = urandom(32)
-    info: bytes = b"RatchetPair v1.0"
+    salt: bytes = hkdf_salt
+    info: bytes = hkdf_info
 
     # HMAC parameters
     hmac_hashing_algorithm: HashAlgorithm = hashes.SHA256()
