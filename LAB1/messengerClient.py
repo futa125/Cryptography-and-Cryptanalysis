@@ -190,7 +190,7 @@ class Ratchet:
         return chain_key, message_key
 
     def _check_max_skip(self, header: Header):
-        if (header.message_index - self.recv_count) > self.max_skip:
+        if len(self.skipped_message_keys) + (header.message_index - self.recv_count) > self.max_skip:
             raise MaxMessageSkipExceeded(self.max_skip, header.message_index - self.recv_count)
 
     def _use_previously_generated_message_key(self, ciphertext: bytes, header: Header) -> bytes:
@@ -206,17 +206,7 @@ class Ratchet:
         return plaintext
 
     def _save_generated_message_keys(self, header: Header):
-        if len(self.skipped_message_keys) + (header.message_index - self.recv_count) > self.max_skip:
-            self._delete_old_message_keys(header)
-
         for _ in range(header.message_index - self.recv_count):
             self.recv_key, message_key = self._kdf(self.recv_key)
             self.skipped_message_keys[self.recv_count] = message_key
             self.recv_count += 1
-
-    def _delete_old_message_keys(self, header: Header):
-        for message_index in sorted(self.skipped_message_keys.keys(), key=int):
-            if len(self.skipped_message_keys) + (header.message_index - self.recv_count) <= self.max_skip:
-                break
-
-            del self.skipped_message_keys[message_index]
