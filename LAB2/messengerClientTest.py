@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 
-import os
 import pickle
 import unittest
-from messengerClient import (
-    MessengerClient
-)
-from cryptography.hazmat.primitives.asymmetric import ec
+
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from messengerClient import MessengerClient
+
 
 def generate_p384_key_pair():
     secret_key = ec.generate_private_key(ec.SECP384R1())
     public_key = secret_key.public_key()
-    return (secret_key, public_key)
+    return secret_key, public_key
+
 
 def sign_with_ecdsa(secret_key, data):
     signature = secret_key.sign(data, ec.ECDSA(hashes.SHA256()))
     return signature
+
 
 class TestMessenger(unittest.TestCase):
 
@@ -211,7 +213,6 @@ class TestMessenger(unittest.TestCase):
         result = eve.receive_message('Alice', message)
         self.assertEqual(plaintext, result)
 
-
     def test_user_can_send_stream_of_messages_with_infrequent_responses(self):
 
         alice = MessengerClient('Alice', self.ca_pk)
@@ -247,7 +248,7 @@ class TestMessenger(unittest.TestCase):
         bob_cert = bob.generate_certificate()
 
         alice_cert_sign = sign_with_ecdsa(self.ca_sk, pickle.dumps(alice_cert))
-        bob_cert_sign = sign_with_ecdsa(self.ca_sk, pickle.dumps(bob_cert))
+        _bob_cert_sign = sign_with_ecdsa(self.ca_sk, pickle.dumps(bob_cert))
 
         bob.receive_certificate(alice_cert, alice_cert_sign)
 
@@ -274,6 +275,7 @@ class TestMessenger(unittest.TestCase):
         alice.receive_message('Bob', message)
 
         self.assertRaises(Exception, alice.receive_message, 'Bob', message)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
