@@ -179,8 +179,6 @@ class DoubleRatchet:
 
     def ratchet_encrypt(self, plaintext: bytes) -> Message:
         if self.CKs is None:
-            private_key = X25519PrivateKey.generate()
-            self.DHs = X25519KeyPair(private_key, private_key.public_key())
             self.RK, self.CKs = self._kdf_rk(self.RK, self.DHs.private_key.exchange(self.DHr))
 
         mk, self.CKs = self._kdf_ck(self.CKs)
